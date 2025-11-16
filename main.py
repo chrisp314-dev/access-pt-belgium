@@ -1,0 +1,230 @@
+from fastapi import FastAPI, HTTPException, Query
+import requests
+from pyproj import Transformer
+import openpyxl
+import os
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ------------------- Géocodage via Nominatim -------------------
+
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+transformer = Transformer.from_crs("EPSG:4326", "EPSG:3812", always_xy=True)
+
+# ------------------- Chargement de la grille -------------------
+
+BASE_DIR = os.path.dirname(__file__)
+EXCEL_PATH = os.path.join(BASE_DIR, "grid_scores.xlsx")
+
+# Cases dynamiques (rectangles variables)
+CASES: list[dict] = []
+
+
+def load_cases():
+    """
+    Charge les cases depuis ton fichier Excel.
+    Colonnes obligatoires : id, X_LB2008, Y_LB2008, ms_len, score
+    """
+    if not os.path.exists(EXCEL_PATH):
+        raise SystemExit(f"Fichier Excel introuvable : {EXCEL_PATH}")
+
+    wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
+    ws = wb.active
+
+    # Lire en-têtes
+    header = list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True)))
+
+    # Trouver les indices colonne → position
+    def idx(colname):
+        try:
+            return header.index(colname)
+        except ValueError:
+            raise SystemExit(f"Colonne manquante : '{colname}'. En-têtes : {header}")
+
+    idx_id = idx("id")
+    idx_x = idx("X_LB2008")
+    idx_y = idx("Y_LB2008")
+    idx_len = idx("ms_len")
+    idx_score = idx("score")
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if row is None:
+            continue
+
+        try:
+            id_val = int(row[idx_id])
+            x_center = float(row[idx_x])
+            y_center = float(row[idx_y])
+            size = float(row[idx_len])     # taille en mètres
+            score = float(row[idx_score])
+        except Exception:
+            continue
+
+        half = size / 2.0
+
+        case = {
+            "id": id_val,
+            "score": score,
+            "x_min": x_center - half,
+            "x_max": x_center + half,
+            "y_min": y_center - half,
+            "y_max": y_center + half,
+            "center_x": x_center,
+            "center_y": y_center,
+            "size": size,
+        }
+        CASES.append(case)
+
+    if not CASES:
+        raise SystemExit("Aucune case chargée dans la grille.")
+
+
+load_cases()
+
+
+# ------------------- Fonctions utilitaires -------------------
+
+@app.get("/ping")
+def ping():
+    return {"ok": True, "nb_cases": len(CASES)}
+
+
+def geocode_belgium(address: str):
+    r = requests.get(
+        NOMINATIM_URL,
+        params={
+            "q": address,
+            "format": "json",
+            "addressdetails": 1,
+            "countrycodes": "be",
+            "limit": 1,
+        },
+        headers={"User-Agent": "AccessTC-app/1.0"},
+        timeout=10
+    )
+    data = r.json()
+
+    if not data:
+        raise HTTPException(404, "Adresse introuvable")
+
+    lon = float(data[0]["lon"])
+    lat = float(data[0]["lat"])
+    return lon, lat
+
+
+def find_case_for_point(x, y):
+    for c in CASES:
+        if (c["x_min"] <= x < c["x_max"]) and (c["y_min"] <= y < c["y_max"]):
+            return c
+    return None
+
+
+def classify(score):
+    if score < 1000:
+        return "Perdu dans la pampa"
+    if score < 3:
+        return "moyen"
+    if score < 6:
+        return "bon"
+    return "mystère"
+
+
+# ------------------- Endpoint principal -------------------
+
+@app.get("/score_by_address")
+def score_by_address(address: str = Query(..., min_length=4)):
+    lon, lat = geocode_belgium(address)
+    x, y = transformer.transform(lon, lat)
+
+    case = find_case_for_point(x, y)
+    if case is None:
+        raise HTTPException(404, "Adresse hors de la zone de la grille")
+
+    score = case["score"]
+
+    return {
+        "address_input": address,
+        "geocoding": {"lon": lon, "lat": lat},
+        "lambert2008": {"x": x, "y": y},
+        "case": {
+            "id": case["id"],
+            "score": score,
+            "classe": classify(score),
+            "center_lambert2008": {
+                "x_center": case["center_x"],
+                "y_center": case["center_y"],
+            },
+            "bounds_lambert2008": {
+                "x_min": case["x_min"],
+                "x_max": case["x_max"],
+                "y_min": case["y_min"],
+                "y_max": case["y_max"],
+            },
+            "size_meters": case["size"],
+        },
+    }
+@app.get("/score_structured")
+def score_structured(
+    street: str = Query(..., min_length=2, description="Rue, avenue, ..."),
+    number: str = Query(..., min_length=1, description="Numéro de maison"),
+    postal_code: str = Query(..., min_length=4, max_length=4, description="Code postal à 4 chiffres"),
+    city: str | None = Query(None, description="Commune (facultatif, mais recommandé)")
+):
+    """
+    Variante de /score_by_address avec adresse structurée.
+    Tu fournis street, number, postal_code (+ éventuellement city),
+    et on construit une adresse complète pour le géocodage.
+    """
+
+    if city:
+        full_address = f"{street} {number}, {postal_code} {city}, Belgique"
+    else:
+        full_address = f"{street} {number}, {postal_code}, Belgique"
+
+    lon, lat = geocode_belgium(full_address)
+    x, y = transformer.transform(lon, lat)
+
+    case = find_case_for_point(x, y)
+    if case is None:
+        raise HTTPException(404, "Adresse hors de la zone de la grille")
+
+    score = case["score"]
+
+    return {
+        "address_input_structured": {
+            "street": street,
+            "number": number,
+            "postal_code": postal_code,
+            "city": city,
+        },
+        "address_built_for_geocoding": full_address,
+        "geocoding": {"lon": lon, "lat": lat},
+        "lambert2008": {"x": x, "y": y},
+        "case": {
+            "id": case["id"],
+            "score": score,
+            "classe": classify(score),
+            "center_lambert2008": {
+                "x_center": case["center_x"],
+                "y_center": case["center_y"],
+            },
+            "bounds_lambert2008": {
+                "x_min": case["x_min"],
+                "x_max": case["x_max"],
+                "y_min": case["y_min"],
+                "y_max": case["y_max"],
+            },
+            "size_meters": case["size"],
+        },
+    }

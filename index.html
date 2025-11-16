@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Score d'accessibilité TC</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: system-ui, Arial, sans-serif;
+      margin: 20px;
+      max-width: 800px;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-top: 10px;
+      font-weight: 600;
+    }
+
+    input {
+      width: 100%;
+      padding: 7px;
+      margin-top: 4px;
+      box-sizing: border-box;
+      font-size: 15px;
+    }
+
+    button {
+      margin-top: 15px;
+      padding: 10px 18px;
+      font-size: 15px;
+      cursor: pointer;
+      background-color: #0067c0;
+      border: none;
+      border-radius: 4px;
+      color: #fff;
+    }
+
+    button:hover {
+      background-color: #004e96;
+    }
+
+    #result {
+      margin-top: 25px;
+    }
+
+    .card {
+      border: 1px solid #ccc;
+      padding: 16px;
+      border-radius: 6px;
+      background: #fafafa;
+    }
+
+    .score-box {
+      padding: 14px;
+      border-radius: 6px;
+      color: white;
+      font-size: 18px;
+      margin-bottom: 15px;
+      text-align: center;
+      font-weight: bold;
+    }
+
+    .score-low { background-color: #d9534f; }      /* rouge */
+    .score-medium { background-color: #f0ad4e; }   /* orange */
+    .score-good { background-color: #5bc0de; }     /* bleu */
+    .score-verygood { background-color: #5cb85c; } /* vert */
+
+    .details {
+      margin-top: 10px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .json-block {
+      white-space: pre-wrap;
+      background: #f6f6f6;
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid #ddd;
+      margin-top: 10px;
+      font-family: Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .toggle-json {
+      margin-top: 10px;
+      cursor: pointer;
+      color: #0067c0;
+      text-decoration: underline;
+      font-size: 14px;
+    }
+
+    .error {
+      color: #b00;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Score d'accessibilité en transport public</h1>
+
+  <form id="score-form">
+    <label>
+      Rue
+      <input type="text" id="street" required placeholder="Rue de la Loi">
+    </label>
+    <label>
+      Numéro
+      <input type="text" id="number" required placeholder="16">
+    </label>
+    <label>
+      Code postal
+      <input type="text" id="postal_code" required placeholder="1000">
+    </label>
+    <label>
+      Commune (optionnel)
+      <input type="text" id="city" placeholder="Bruxelles">
+    </label>
+
+    <button type="submit">Obtenir le score</button>
+  </form>
+
+  <div id="result"></div>
+
+  <script>
+    const API_BASE = "http://127.0.0.1:8000";
+
+    const form = document.getElementById("score-form");
+    const resultDiv = document.getElementById("result");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      resultDiv.innerHTML = "Calcul en cours...";
+
+      const street = document.getElementById("street").value.trim();
+      const number = document.getElementById("number").value.trim();
+      const postal_code = document.getElementById("postal_code").value.trim();
+      const city = document.getElementById("city").value.trim();
+
+      const params = new URLSearchParams({ street, number, postal_code });
+      if (city) params.append("city", city);
+
+      try {
+        const resp = await fetch(`${API_BASE}/score_structured?` + params.toString());
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          resultDiv.innerHTML = `<div class="error">Erreur: ${err.detail || resp.status}</div>`;
+          return;
+        }
+
+        const data = await resp.json();
+        renderResult(data);
+
+      } catch (err) {
+        resultDiv.innerHTML = `<div class="error">Erreur réseau.</div>`;
+      }
+    });
+
+    function renderResult(data) {
+      const score = data.case.score;
+      const classe = data.case.classe;
+
+      // Couleurs
+      let scoreClass = "score-medium";
+      if (classe === "faible") scoreClass = "score-low";
+      if (classe === "bon") scoreClass = "score-good";
+      if (classe === "très bon") scoreClass = "score-verygood";
+
+      const bounds = data.case.bounds_lambert2008;
+
+      resultDiv.innerHTML = `
+        <div class="card">
+
+          <div class="score-box ${scoreClass}">
+            Score: ${score} – ${classe.toUpperCase()}
+          </div>
+
+          <div class="details">
+            <strong>Case ID :</strong> ${data.case.id}<br>
+            <strong>Coordonnées Lambert 2008 :</strong><br>
+            – X = ${data.lambert2008.x.toFixed(1)}<br>
+            – Y = ${data.lambert2008.y.toFixed(1)}<br><br>
+
+            <strong>Étendue de la case :</strong><br>
+            X : [${bounds.x_min.toFixed(1)} ; ${bounds.x_max.toFixed(1)}]<br>
+            Y : [${bounds.y_min.toFixed(1)} ; ${bounds.y_max.toFixed(1)}]<br><br>
+
+            <strong>Adresse géocodée :</strong> ${data.address_built_for_geocoding}
+          </div>
+
+          <div class="toggle-json" onclick="toggleJson()">Afficher les détails techniques</div>
+
+          <div id="json-block" class="json-block" style="display:none;">
+            ${JSON.stringify(data, null, 2)}
+          </div>
+        </div>
+      `;
+    }
+
+    function toggleJson() {
+      const block = document.getElementById("json-block");
+      block.style.display = block.style.display === "none" ? "block" : "none";
+    }
+  </script>
+</body>
+</html>
