@@ -24,74 +24,83 @@ transformer = Transformer.from_crs("EPSG:4326", "EPSG:3812", always_xy=True)
 
 # ------------------- Chargement de la grille -------------------
 
-BASE_DIR = os.path.dirname(__file__)
-EXCEL_PATH = os.path.join(BASE_DIR, "grid_scores.xlsx")
+import csv
+import os
 
-# Cases dynamiques (rectangles variables)
+BASE_DIR = os.path.dirname(__file__)
+CSV_PATH = os.path.join(BASE_DIR, "grid_scores.csv")
+
 CASES: list[dict] = []
 
 
 def load_cases():
     """
-    Charge les cases depuis ton fichier Excel.
+    Charge les cases depuis grid_scores.csv (séparateur ;, décimales ,).
     Colonnes obligatoires : id, X_LB2008, Y_LB2008, ms_len, score
     """
-    if not os.path.exists(EXCEL_PATH):
-        raise SystemExit(f"Fichier Excel introuvable : {EXCEL_PATH}")
+    if not os.path.exists(CSV_PATH):
+        raise SystemExit(f"Fichier CSV introuvable : {CSV_PATH}")
 
-    wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
-    ws = wb.active
+    with open(CSV_PATH, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f, delimiter=';')
 
-    # Lire en-têtes
-    header = list(next(ws.iter_rows(min_row=1, max_row=1, values_only=True)))
+        if not reader.fieldnames:
+            raise SystemExit("Impossible de lire les en-têtes du CSV.")
 
-    # Trouver les indices colonne → position
-    def idx(colname):
-        try:
-            return header.index(colname)
-        except ValueError:
-            raise SystemExit(f"Colonne manquante : '{colname}'. En-têtes : {header}")
+        # Normaliser les noms d'en-tête (trim) et construire une map
+        raw_headers = reader.fieldnames
+        header_map = {h.strip(): h for h in raw_headers}
 
-    idx_id = idx("id")
-    idx_x = idx("X_LB2008")
-    idx_y = idx("Y_LB2008")
-    idx_len = idx("ms_len")
-    idx_score = idx("score")
+        required = ["id", "X_LB2008", "Y_LB2008", "ms_len", "score"]
+        missing = [r for r in required if r not in header_map]
+        if missing:
+            raise SystemExit(
+                f"Colonnes manquantes dans grid_scores.csv : {missing}. "
+                f"En-têtes trouvées : {raw_headers}"
+            )
 
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if row is None:
-            continue
+        id_key = header_map["id"]
+        x_key = header_map["X_LB2008"]
+        y_key = header_map["Y_LB2008"]
+        len_key = header_map["ms_len"]
+        score_key = header_map["score"]
 
-        try:
-            id_val = int(row[idx_id])
-            x_center = float(row[idx_x])
-            y_center = float(row[idx_y])
-            size = float(row[idx_len])     # taille en mètres
-            score = float(row[idx_score])
-        except Exception:
-            continue
+        for row in reader:
+            try:
+                id_val = int(row[id_key])
 
-        half = size / 2.0
+                # ex: "525484,4046" -> 525484.4046
+                x_center = float(row[x_key].replace(",", "."))
+                y_center = float(row[y_key].replace(",", "."))
+                size = float(row[len_key].replace(",", "."))
+                score = float(row[score_key].replace(",", "."))
+            except (TypeError, ValueError, KeyError, AttributeError):
+                # Ligne invalide → on skip
+                continue
 
-        case = {
-            "id": id_val,
-            "score": score,
-            "x_min": x_center - half,
-            "x_max": x_center + half,
-            "y_min": y_center - half,
-            "y_max": y_center + half,
-            "center_x": x_center,
-            "center_y": y_center,
-            "size": size,
-        }
-        CASES.append(case)
+            half = size / 2.0
+
+            case = {
+                "id": id_val,
+                "score": score,
+                "x_min": x_center - half,
+                "x_max": x_center + half,
+                "y_min": y_center - half,
+                "y_max": y_center + half,
+                "center_x": x_center,
+                "center_y": y_center,
+                "size": size,
+            }
+            CASES.append(case)
 
     if not CASES:
-        raise SystemExit("Aucune case chargée dans la grille.")
+        raise SystemExit(
+            f"Aucune case valide trouvée dans grid_scores.csv. "
+            f"Vérifie le contenu (id;ms_len;...;X_LB2008;Y_LB2008;score)."
+        )
 
-
+# Charger la grille au démarrage
 load_cases()
-
 
 # ------------------- Fonctions utilitaires -------------------
 
