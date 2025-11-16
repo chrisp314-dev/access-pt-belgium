@@ -174,8 +174,8 @@
 <div id="result"></div>
 
 <script>
-  // Pour test local : backend FastAPI en local
-  const API_BASE = "http://127.0.0.1:8000";
+  // Pour test local
+  const API_BASE = "https://access-pt-belgium-1.onrender.com";
   // Pour Render : const API_BASE = "https://ton-backend.onrender.com";
 
   const form = document.getElementById("score-form");
@@ -201,6 +201,7 @@
         return;
       }
       const data = await resp.json();
+      console.log("Réponse API :", data);
       renderResult(data);
     } catch (err) {
       console.error(err);
@@ -217,12 +218,11 @@
     return "score-verygood";
   }
 
-function formatPercent(pct) {
+  function formatPercent(pct) {
     if (pct == null || isNaN(pct)) return "n.d.";
-    const v = pct * 100;   // <--- conversion proportion -> pourcentage réel
+    const v = pct * 100;
     return v.toFixed(2).replace(".", ",") + " %";
-}
-
+  }
 
   function formatScore(score) {
     if (score == null || isNaN(score)) return "n.d.";
@@ -244,8 +244,9 @@ function formatPercent(pct) {
     const trainPct = train.percentile;
     const mtbPct = mtb.percentile;
 
-    const addr = data.address_built_for_geocoding || "";
+    console.log("totalPct brut :", totalPct, "affiché :", formatPercent(totalPct));
 
+    const addr = data.address_built_for_geocoding || "";
     const jsonPretty = JSON.stringify(data, null, 2);
 
     resultDiv.innerHTML = `
@@ -271,21 +272,30 @@ function formatPercent(pct) {
             <div class="subcard-title">Total TC (sans TGV)</div>
             <div><strong>${formatScore(total.score10)}</strong></div>
             <div>${total.score10_comment || ""}</div>
-            <div class="muted">Adresse mieux desservie que : <strong>${formatPercent(totalPct)}</strong> de la population</div>
+            <div class="muted">
+              Adresse mieux desservie que :
+              <strong>${formatPercent(totalPct)}</strong> de la population
+            </div>
           </div>
 
           <div class="subcard">
             <div class="subcard-title">Train (SNCB)</div>
             <div><strong>${formatScore(train.score10)}</strong></div>
             <div>${train.score10_comment || ""}</div>
-            <div class="muted">Adresse mieux desservie que : <strong>${formatPercent(trainPct)}</strong></div>
+            <div class="muted">
+              Adresse mieux desservie que :
+              <strong>${formatPercent(trainPct)}</strong>
+            </div>
           </div>
 
           <div class="subcard">
             <div class="subcard-title">Bus / Tram / Métro (MTB)</div>
             <div><strong>${formatScore(mtb.score10)}</strong></div>
             <div>${mtb.score10_comment || ""}</div>
-            <div class="muted">Adresse mieux desservie que : <strong>${formatPercent(mtbPct)}</strong></div>
+            <div class="muted">
+              Adresse mieux desservie que :
+              <strong>${formatPercent(mtbPct)}</strong>
+            </div>
           </div>
         </div>
 

@@ -112,7 +112,8 @@ def load_cases():
                         if col.endswith("_Classe_10"):
                             extras[col] = int(float(val_str))
                         else:
-                            extras[col] = round(float(val_str), 2)
+                            # Pourcentiles = garder toute la précision (pas d'arrondi ici)
+                            extras[col] = float(val_str)
                     except Exception:
                         extras[col] = None
                 else:
