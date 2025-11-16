@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query
 import requests
 from pyproj import Transformer
-import openpyxl
 import os
 from fastapi.middleware.cors import CORSMiddleware
 
